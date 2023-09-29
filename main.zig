@@ -1,10 +1,9 @@
 const std = @import("std");
 const c = @cImport({
     @cInclude("sys/ptrace.h");
-    @cInclude("sys/types.h");
     @cInclude("sys/user.h");
     @cInclude("sys/wait.h");
-    @cInclude("unistd.h");
+    @cInclude("errno.h");
 });
 
 pub fn main() !void {
@@ -125,6 +124,15 @@ fn interceptChildSyscalls(
                 .write => {
                     std.debug.assert(regs.rsi == regs2.rsi);
                     std.debug.assert(regs.rdx == regs2.rdx);
+
+                    var dataLength = regs.rdx;
+                    if (dataLength > 2) {
+                        // Force the writes to stop after the first one.
+                        // -EPERM == maxValue(c_ulonglong)
+                        // -EIO   == maxValue(c_ulonglong)  -4
+                        regs2.rax = std.math.maxInt(c_ulonglong) - 4;
+                        _ = c.ptrace(c.PTRACE_SETREGS, pid, cNullPtr, &regs2);
+                    }
                 },
                 else => {},
             }

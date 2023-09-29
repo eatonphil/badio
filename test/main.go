@@ -11,22 +11,7 @@ func main() {
 	}
 
 	text := "some great stuff"
-	n, err := f.Write([]byte(text))
-	if err != nil {
-		panic(err)
-	}
+	_, _ = f.Write([]byte(text))
 
-	if len(text) != n {
-		panic("Incomplete write.")
-	}
-
-	err = f.Sync()
-	if err != nil {
-		panic(err)
-	}
-
-	err = f.Close()
-	if err != nil {
-		panic(err)
-	}
+	_ = f.Close()
 }
