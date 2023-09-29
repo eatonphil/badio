@@ -57,12 +57,23 @@ fn interceptChildSyscalls(
         var regs: c.user_regs_struct = undefined;
         _ = c.ptrace(c.PTRACE_GETREGS, pid, cNullPtr, &regs);
 
-        const syscall: std.os.linux.syscalls.X64 = @enumFromInt(regs.orig_rax);
+        var syscall = std.os.linux.syscalls.X64.futex_waitv;
+        if (regs.orig_rax < @intFromEnum(std.os.linux.syscalls.X64.futex_waitv)) {
+            syscall = @enumFromInt(regs.orig_rax);
+        }
+        const fd = regs.rdi;
+        var waitForExit = true;
         switch (syscall) {
             .write => {
-                const fd = regs.rdi;
                 const dataAddress = regs.rsi;
-                const dataLength = regs.rdx;
+                var dataLength = regs.rdx;
+
+                // Truncate some bytes
+                if (dataLength > 2) {
+                    regs.rdx -= 2;
+                    dataLength -= 2;
+                    _ = c.ptrace(c.PTRACE_SETREGS, pid, cNullPtr, &regs);
+                }
 
                 var data = std.ArrayList(u8).init(arena.allocator());
                 while (data.items.len < dataLength) {
@@ -74,32 +85,49 @@ fn interceptChildSyscalls(
                     );
 
                     for (std.mem.asBytes(&word)) |byte| {
+                        if (data.items.len == dataLength) {
+                            break;
+                        }
                         try data.append(byte);
                     }
                 }
 
-                std.debug.print("Got a write to {}: {s}\n", .{ fd, data.items });
-                if (dataLength > 2) {
-                    regs.rdi = fd;
-                    regs.rsi = dataAddress;
-                    regs.rdx = dataLength - 2;
-                    _ = c.ptrace(c.PTRACE_SETREGS, pid, cNullPtr, &regs);
-                }
+                std.debug.print("Got a write on {}: {s}\n", .{ fd, data.items });
             },
             .close => {
-                std.debug.print("Got a close\n", .{});
+                std.debug.print("Got a close on {}\n", .{fd});
             },
             .fsync => {
-                std.debug.print("Got an fsync\n", .{});
+                std.debug.print("Got an fsync on {}\n", .{fd});
             },
-            else => {},
+            else => {
+                waitForExit = false;
+            },
         }
 
-        // Handle syscall exit
-        _ = c.ptrace(c.PTRACE_SYSCALL, pid, cNullPtr, cNullPtr);
-        _ = c.waitpid(pid, &status, 0);
-        if (status == 0) {
-            break;
+        if (waitForExit) {
+            // Handle syscall exit
+            _ = c.ptrace(c.PTRACE_SYSCALL, pid, cNullPtr, cNullPtr);
+            _ = c.waitpid(pid, &status, 0);
+            if (status == 0) {
+                break;
+            }
+
+            var regs2: c.user_regs_struct = undefined;
+            _ = c.ptrace(c.PTRACE_GETREGS, pid, cNullPtr, &regs2);
+
+            var syscall2 = std.os.linux.syscalls.X64.futex_waitv;
+            if (regs2.orig_rax < @intFromEnum(std.os.linux.syscalls.X64.futex_waitv)) {
+                syscall2 = @enumFromInt(regs2.orig_rax);
+            }
+            std.debug.assert(syscall == syscall2);
+            switch (syscall2) {
+                .write => {
+                    std.debug.assert(regs.rsi == regs2.rsi);
+                    std.debug.assert(regs.rdx == regs2.rdx);
+                },
+                else => {},
+            }
         }
     }
 }
